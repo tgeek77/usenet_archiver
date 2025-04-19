@@ -16,42 +16,52 @@ This tool should **only** be used with a paid Usenet subscription, not with free
 
 ### Binary Version
 
-The `bin/usenet_archiver` file is a precompiled binary for Linux x86_64. Since this is my first Go project, I’m keeping it simple for now. If you need it for a different OS or architecture, you’ll have to compile it yourself.
+The `bin/usenet_archiver.py` file is a Python script that should be able to run with minimal extra requirements. Previously, I had been experimenting with a go appliction but I know Python better.
 
-### How to Compile
+### Basic usage:
 
-1. **Prerequisites**:
-   - Ensure you have Go installed (version 1.x or later).
-   - Obtain access to a paid Usenet provider and note its address, port, and credentials.
+```
+usage: usenet_archiver.py [-h] --server SERVER [--port PORT] --username USERNAME --password PASSWORD --newsgroup NEWSGROUP [--ssl] [--verbose] [--timeout TIMEOUT]
+                          [--start-date START_DATE] [--end-date END_DATE]
 
-2. **Compile the Program**:
-   Clone the repository and compile the code:
-   ```bash
-   go build main.go
-   ```
+Fetch NNTP articles and save to mbox
+
+options:
+  -h, --help            show this help message and exit
+  --server SERVER       NNTP server address
+  --port PORT           NNTP server port
+  --username USERNAME   Username for authentication
+  --password PASSWORD   Password for authentication
+  --newsgroup NEWSGROUP
+                        Newsgroup to fetch articles from
+  --ssl                 Use SSL connection
+  --verbose             Enable verbose output
+  --timeout TIMEOUT     Timeout for operations (seconds)
+  --start-date START_DATE
+                        Start date for articles (YYYY-MM-DD)
+  --end-date END_DATE   End date for articles (YYYY-MM-DD)
+```
 
 ### How to Run
 
-1. **Run the Program**:
-   Execute the compiled binary with the required flags. Example:
-   ```bash
-   ./usenet_archiver -server "news.example.com" -port 563 -username "user" -password "pass" -newsgroup "alt.test" -ssl true -verbose true -timeout 60s
-   ```
-   - `-server`: The NNTP server address (required).
-   - `-port`: The server port (default: 563 for SSL).
-   - `-username` and `-password`: Credentials for authentication (required).
-   - `-newsgroup`: The Usenet group to archive (e.g., `alt.test`, required).
-   - `-ssl`: Use SSL (default: true).
-   - `-verbose`: Enable detailed output (default: false).
-   - `-timeout`: Set operation timeout (default: 60 seconds).
+Example:
 
-2. **Output**:
-   - Articles are saved to a file like `alt_test.mbox`.
-   - Logs are written to `fetch_log.txt`.
+```
+/usr/local/bin/usenet_archiver.py \
+  --verbose
+  --server {{ myusenet_server}} \
+  --port 563 
+  --username {{ username }} \
+  --password {{ password }} \
+  --newsgroup news.groups \
+  --ssl \
+  --timeout 60
+  --start-date 2021-01-01
+  --end-date 2022-01-01
+```
 
-3. **Example Output**:
-   Running the above command might create an `alt_test.mbox` file containing articles in mbox format and log connection details in `fetch_log.txt`.
+**Output**:
+   - Articles are saved to a file like `news.groups.mbox`.
+   - Logs are written to `news.groups.log` and `error_news.groups.log`.
+   - When completed, the name of the mbox file is added `to completed_newsgroups.log`. If you run the script again, it will not overwrite what is in the existing `news.groups.mbox` unless you remove that entry from the completed log.
 
-### Future Updates
-
-I plan to add a timeframe option in the future, allowing users to fetch archives within a specific date range. Ideally, I’d like to create yearly archives (e.g., January to January) of Usenet activity.
