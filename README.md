@@ -47,7 +47,7 @@ options:
 Example:
 
 ```
-/usr/local/bin/usenet_archiver.py \
+/usr/bin/python3 usenet_archiver.py \
   --verbose
   --server {{ myusenet_server}} \
   --port 563 
