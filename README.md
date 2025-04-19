@@ -63,5 +63,5 @@ Example:
 **Output**:
    - Articles are saved to a file like `news.groups.mbox`.
    - Logs are written to `news.groups.log` and `error_news.groups.log`.
-   - When completed, the name of the mbox file is added `to completed_newsgroups.log`. If you run the script again, it will not overwrite what is in the existing `news.groups.mbox` unless you remove that entry from the completed log.
+   - When completed, the name of the mbox file is added to `completed_newsgroups.log`. If you run the script again, it will not overwrite what is in the existing `news.groups.mbox` unless you remove that entry from the completed log.
 
