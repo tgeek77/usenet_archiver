@@ -48,15 +48,15 @@ Example:
 
 ```
 /usr/bin/python3 usenet_archiver.py \
-  --verbose
+  --verbose \
   --server {{ myusenet_server}} \
   --port 563 
   --username {{ username }} \
   --password {{ password }} \
   --newsgroup news.groups \
   --ssl \
-  --timeout 60
-  --start-date 2021-01-01
+  --timeout 60 \
+  --start-date 2021-01-01 \
   --end-date 2022-01-01
 ```
 
