@@ -16,7 +16,7 @@ This tool should **only** be used with a paid Usenet subscription, not with free
 
 ### Binary Version
 
-The `bin/usenet_archiver.py` file is a Python script that should be able to run with minimal extra requirements. Previously, I had been experimenting with a go appliction but I know Python better.
+The `bin/usenet_archiver.py` file is a Python script that should be able to run with minimal extra requirements. Previously, I had been experimenting with a go application but I know Python better.
 
 ### Basic usage:
 
