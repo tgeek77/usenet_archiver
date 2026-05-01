@@ -9,6 +9,11 @@ import os
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
+
+class NNTPTimeout(Exception):
+    """Raised when an NNTP socket read exceeds the configured timeout."""
+
+
 class NNTPClient:
     def __init__(self, server, port, username, password, use_ssl, verbose, timeout):
         self.server = server
@@ -79,50 +84,43 @@ class NNTPClient:
                         buffer = lines[1]
                         return lines[0].strip()
             except socket.timeout:
-                raise Exception("The read operation timed out")
-        return buffer.strip()
+                raise NNTPTimeout("The read operation timed out")
 
-    def recv_multiline(self):
+    def _iter_dot_stuffed_body_lines(self):
+        """Read an NNTP dot-terminated multiline body; handles TCP fragmentation and dot-unstuffing (RFC 3977)."""
         self.conn.settimeout(self.timeout)
-        buffer = []
+        carry = ""
         while True:
             try:
                 data = self.conn.recv(8192).decode("utf-8", errors="ignore")
                 if not data:
                     raise Exception("Connection closed by server")
-                lines = data.split("\n")
-                for line in lines:
+                carry += data
+                while "\n" in carry:
+                    line, carry = carry.split("\n", 1)
                     line = line.rstrip("\r")
                     if line == ".":
-                        return buffer
-                    buffer.append(line)
+                        return
+                    if line.startswith("."):
+                        line = line[1:]
+                    yield line
             except socket.timeout:
-                raise Exception("The read operation timed out")
+                raise NNTPTimeout("The read operation timed out")
+
+    def recv_multiline(self):
+        return list(self._iter_dot_stuffed_body_lines())
 
     def recv_article(self):
-        self.conn.settimeout(self.timeout)
-        buffer = []
         retries = 3
         while retries > 0:
             try:
-                while True:
-                    data = self.conn.recv(8192).decode("utf-8", errors="ignore")
-                    if not data:
-                        raise Exception("Connection closed by server")
-                    lines = data.split("\n")
-                    for line in lines:
-                        line = line.rstrip("\r")
-                        if line == ".":
-                            return "\n".join(buffer)
-                        buffer.append(line)
-            except socket.timeout:
+                return "\n".join(self._iter_dot_stuffed_body_lines())
+            except NNTPTimeout:
                 retries -= 1
                 if retries == 0:
-                    raise Exception("The read operation timed out after retries")
+                    raise NNTPTimeout("The read operation timed out after retries")
                 self.logger.warning(f"Timeout in recv_article, retries left: {retries}")
-                time.sleep(1)  # Brief pause before retry
-            except Exception as e:
-                raise e
+                time.sleep(1)
 
     def xhdr_date(self, start_id, end_id):
         self.send(f"XHDR DATE {start_id}-{end_id}")
@@ -595,27 +593,40 @@ def save_to_mbox(server, port, username, password, newsgroup, use_ssl, verbose, 
 def main():
     parser = argparse.ArgumentParser(description="Fetch NNTP articles and save to mbox")
     parser.add_argument("--server", required=True, help="NNTP server address")
-    parser.add_argument("--port", type=int, default=563, help="NNTP server port")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="NNTP server port (default: 563 with TLS, 119 for plain NNTP)",
+    )
     parser.add_argument("--username", required=True, help="Username for authentication")
     parser.add_argument("--password", required=True, help="Password for authentication")
     parser.add_argument("--newsgroup", required=True, help="Newsgroup to fetch articles from")
-    parser.add_argument("--ssl", action="store_true", default=True, help="Use SSL connection")
+    parser.add_argument(
+        "--no-ssl",
+        dest="use_ssl",
+        action="store_false",
+        help="Disable TLS and use plain NNTP (typical port 119)",
+    )
+    parser.set_defaults(use_ssl=True)
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
     parser.add_argument("--timeout", type=int, default=60, help="Timeout for operations (seconds)")
     parser.add_argument("--start-date", help="Start date for articles (YYYY-MM-DD)")
     parser.add_argument("--end-date", help="End date for articles (YYYY-MM-DD)")
     args = parser.parse_args()
 
+    port = args.port if args.port is not None else (563 if args.use_ssl else 119)
+
     start_date = parse_date(args.start_date) if args.start_date else None
     end_date = parse_date(args.end_date) if args.end_date else None
 
     save_to_mbox(
         args.server,
-        args.port,
+        port,
         args.username,
         args.password,
         args.newsgroup,
-        args.ssl,
+        args.use_ssl,
         args.verbose,
         args.timeout,
         start_date,
