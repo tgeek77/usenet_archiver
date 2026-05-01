@@ -18,7 +18,7 @@ Python **3.x**, **standard library only** (no `pip` packages).
 ### What it does
 
 - Opens an NNTP connection (TLS by default, port **563**, or plain NNTP with **`--no-ssl`**, default port **119**).
-- Optionally restricts downloads with **`--start-date`** and **`--end-date`** (both required for date filtering; format **`YYYY-MM-DD`**).
+- Optionally restricts downloads with **`--start-date`** and **`--end-date`** (format **`YYYY-MM-DD`**). You may pass **only** `--start-date` (end defaults to **today, UTC**) or **only** `--end-date` (start defaults to **1990-01-01**). Passing **neither** fetches the full article-number range (no date filter in the initial range logic).
 - Writes articles into an **mbox** file and writes a **`.log`** file next to it (filenames include the date range when dates are used).
 - Appends the mbox filename to **`completed_newsgroups.log`** in the **current working directory** after a successful run so the same job can be skipped on rerun (remove the line from that file if you want to redownload).
 
@@ -49,7 +49,7 @@ Fetch NNTP articles and save to mbox
 | `--no-ssl` | Plain NNTP instead of TLS |
 | `--verbose` | Extra NNTP debugging on stderr |
 | `--timeout` | Socket timeout in seconds (default **60**) |
-| `--start-date`, `--end-date` | Inclusive date window (**both** required for filtering) |
+| `--start-date`, `--end-date` | Inclusive date window; either may be omitted (**defaults**: missing end → today UTC; missing start → 1990-01-01) |
 
 ### Example
 
