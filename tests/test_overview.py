@@ -8,10 +8,10 @@ import sys
 import unittest
 from datetime import datetime, timezone
 
-_APP = os.path.join(os.path.dirname(__file__), "..", "app")
-sys.path.insert(0, os.path.abspath(_APP))
+_ROOT = os.path.join(os.path.dirname(__file__), "..")
+sys.path.insert(0, os.path.abspath(_ROOT))
 
-from overview import (  # noqa: E402
+from usenet_archiver.overview import (  # noqa: E402
     OverviewRow,
     bisect_lower,
     bisect_upper,
@@ -93,7 +93,7 @@ class TestBisect(unittest.TestCase):
 
 class TestNonMonotonic(unittest.TestCase):
     def test_out_of_order_date_still_found_by_scan(self):
-        from overview import _scan_chunks
+        from usenet_archiver.overview import _scan_chunks
 
         rows = [
             _row(1, 2020),

@@ -9,10 +9,10 @@ import sys
 import threading
 import unittest
 
-_APP = os.path.join(os.path.dirname(__file__), "..", "app")
-sys.path.insert(0, os.path.abspath(_APP))
+_ROOT = os.path.join(os.path.dirname(__file__), "..")
+sys.path.insert(0, os.path.abspath(_ROOT))
 
-from nntp import NNTPClient, NNTPError  # noqa: E402
+from usenet_archiver.nntp import NNTPClient, NNTPError  # noqa: E402
 
 
 class FakeNNTPServer:
@@ -361,8 +361,8 @@ class TestParallelFetch(unittest.TestCase):
     def test_parallel_and_pipeline(self):
         from datetime import datetime, timezone
 
-        from fetch import fetch_articles_parallel
-        from overview import OverviewRow
+        from usenet_archiver.fetch import fetch_articles_parallel
+        from usenet_archiver.overview import OverviewRow
 
         articles = {
             i: (

@@ -17,12 +17,12 @@ from typing import BinaryIO, List, Optional
 ARTICLE_SPLIT_RE = re.compile(rb"\n(?=Path: )")
 
 # Prefer shared helpers from the archiver package.
-_APP_DIR = Path(__file__).resolve().parent.parent / "app"
-if _APP_DIR.is_dir() and str(_APP_DIR) not in sys.path:
-    sys.path.insert(0, str(_APP_DIR))
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 try:
-    from mboxout import escape_mboxrd, write_mbox_message  # type: ignore
+    from usenet_archiver.mboxout import escape_mboxrd, write_mbox_message  # type: ignore
 except ImportError:
     # Standalone fallback (locale-independent envelope).
     import email

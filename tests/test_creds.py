@@ -9,10 +9,10 @@ import tempfile
 import unittest
 from unittest import mock
 
-_APP = os.path.join(os.path.dirname(__file__), "..", "app")
-sys.path.insert(0, os.path.abspath(_APP))
+_ROOT = os.path.join(os.path.dirname(__file__), "..")
+sys.path.insert(0, os.path.abspath(_ROOT))
 
-from creds import get_default_nntp_server, resolve_credentials, split_host  # noqa: E402
+from usenet_archiver.creds import get_default_nntp_server, resolve_credentials, split_host  # noqa: E402
 
 
 class TestSplitHost(unittest.TestCase):
@@ -125,7 +125,7 @@ class TestResolve(unittest.TestCase):
     def test_missing_server_exits_2(self):
         env = {k: v for k, v in os.environ.items() if k != "NNTPSERVER"}
         with mock.patch.dict(os.environ, env, clear=True):
-            with mock.patch("creds.open", side_effect=OSError("no file")):
+            with mock.patch("usenet_archiver.creds.open", side_effect=OSError("no file")):
                 with self.assertRaises(SystemExit) as cm:
                     resolve_credentials(
                         server=None,

@@ -8,10 +8,10 @@ import os
 import sys
 import unittest
 
-_APP = os.path.join(os.path.dirname(__file__), "..", "app")
-sys.path.insert(0, os.path.abspath(_APP))
+_ROOT = os.path.join(os.path.dirname(__file__), "..")
+sys.path.insert(0, os.path.abspath(_ROOT))
 
-from plugins import apply_plugins, keep_headers, mimify, parse_plugin_spec, strip_headers  # noqa: E402
+from usenet_archiver.plugins import apply_plugins, keep_headers, mimify, parse_plugin_spec, strip_headers  # noqa: E402
 
 
 def _msg():

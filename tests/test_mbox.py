@@ -9,10 +9,10 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 
-_APP = os.path.join(os.path.dirname(__file__), "..", "app")
-sys.path.insert(0, os.path.abspath(_APP))
+_ROOT = os.path.join(os.path.dirname(__file__), "..")
+sys.path.insert(0, os.path.abspath(_ROOT))
 
-from mboxout import (  # noqa: E402
+from usenet_archiver.mboxout import (  # noqa: E402
     MboxWriter,
     escape_mboxrd,
     format_envelope_utc,

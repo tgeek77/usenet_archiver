@@ -9,8 +9,8 @@ import threading
 import time
 from typing import Callable, List, Optional, Sequence, Tuple
 
-from nntp import NNTPClient, NNTPError, NNTPTimeout
-from overview import OverviewRow
+from .nntp import NNTPClient, NNTPError, NNTPTimeout
+from .overview import OverviewRow
 
 logger = logging.getLogger(__name__)
 
