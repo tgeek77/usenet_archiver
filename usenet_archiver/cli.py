@@ -164,6 +164,16 @@ def message_to_bytes(msg) -> bytes:
     return buf.getvalue()
 
 
+def mark_completed(completed_log: str, mbox_filename: str, logger: logging.Logger) -> None:
+    """Append ``mbox_filename`` to the completed-jobs log after a successful pull."""
+    try:
+        with open(completed_log, "a", encoding="utf-8") as fh:
+            fh.write(f"{mbox_filename}\n")
+        logger.info("Recorded successful pull of %s in %s", mbox_filename, completed_log)
+    except OSError as e:
+        logger.error("Failed to update %s: %s", completed_log, e)
+
+
 def pull_group(
     client: NNTPClient,
     group: str,
@@ -178,35 +188,41 @@ def pull_group(
     conn_kwargs: dict,
     connections: int = 8,
     pipeline_depth: int = 32,
+    skip_completed: bool = False,
 ) -> None:
     global _ACTIVE_WRITER
 
-    # Skip only this exact job name (dated mboxes are distinct per window).
-    # If the log lists it but the file was removed, allow a fresh pull.
-    try:
-        if os.path.exists(completed_log):
-            with open(completed_log, encoding="utf-8") as fh:
-                done = {line.strip() for line in fh if line.strip()}
-            if mbox_filename in done and os.path.exists(mbox_filename):
-                logger.info(
-                    "Skipping %s (already in %s; remove that line or the mbox to redo)",
-                    mbox_filename,
-                    completed_log,
-                )
-                return
-            if mbox_filename in done and not os.path.exists(mbox_filename):
-                logger.info(
-                    "%s is listed in %s but the mbox is missing; pulling again",
-                    mbox_filename,
-                    completed_log,
-                )
-    except OSError as e:
-        logger.warning("Could not read %s: %s", completed_log, e)
+    # Optional short-circuit: skip an exact job name already in the completed log.
+    # This is off by default because Message-ID dedup + append make re-pulls
+    # incremental (a re-run only fetches articles not already in the mbox), which
+    # is exactly what "catch up on new posts" needs. Enable to hard-skip finished
+    # dated windows.
+    if skip_completed:
+        try:
+            if os.path.exists(completed_log):
+                with open(completed_log, encoding="utf-8") as fh:
+                    done = {line.strip() for line in fh if line.strip()}
+                if mbox_filename in done and os.path.exists(mbox_filename):
+                    logger.info(
+                        "Skipping %s (already in %s; disable skip-completed to catch up)",
+                        mbox_filename,
+                        completed_log,
+                    )
+                    return
+                if mbox_filename in done and not os.path.exists(mbox_filename):
+                    logger.info(
+                        "%s is listed in %s but the mbox is missing; pulling again",
+                        mbox_filename,
+                        completed_log,
+                    )
+        except OSError as e:
+            logger.warning("Could not read %s: %s", completed_log, e)
 
     first, last, group_resp = client.group(group)
     logger.info("GROUP %s: %s (first=%s last=%s)", group, group_resp, first, last)
     if first == 0 and last == 0:
         logger.info("Group %s is empty", group)
+        mark_completed(completed_log, mbox_filename, logger)
         return
 
     rows = find_articles_in_date_range(
@@ -233,6 +249,7 @@ def pull_group(
 
         if not rows:
             logger.info("Nothing to fetch for %s", group)
+            mark_completed(completed_log, mbox_filename, logger)
             return
 
         def on_article(row, content, resp):
@@ -261,6 +278,7 @@ def pull_group(
                 articles_skipped += 1
 
         stop = _STOP_EVENT if _STOP_EVENT is not None else threading.Event()
+        rows_to_fetch = len(rows)
         _fetched_ok, _missing, _errors, elapsed = fetch_articles_parallel(
             rows=rows,
             group=group,
@@ -271,9 +289,8 @@ def pull_group(
             stop_event=stop,
         )
         del _fetched_ok, _missing, _errors  # on_article counters are authoritative
-        arts_per_s = (articles_saved + articles_missing + articles_errors + articles_skipped) / max(
-            elapsed, 1e-6
-        )
+        attempted = articles_saved + articles_skipped + articles_missing + articles_errors
+        arts_per_s = attempted / max(elapsed, 1e-6)
         kib_per_s = (writer.bytes_written / 1024.0) / max(elapsed, 1e-6)
         logger.info(
             "Group %s done: saved=%s skipped=%s missing=%s errors=%s "
@@ -289,14 +306,29 @@ def pull_group(
             connections,
             pipeline_depth,
         )
-        if _TERMINATED:
+        # Only record completion after a clean, finished pull. Cancelled /
+        # interrupted runs and hard fetch errors must not poison the log —
+        # otherwise skip-completed (and earlier default skip) treats a failed
+        # first attempt as done forever.
+        if _TERMINATED or stop.is_set():
+            logger.warning(
+                "Pull of %s was cancelled/interrupted; not adding to %s",
+                mbox_filename,
+                completed_log,
+            )
             raise TerminatedBySignal("terminated")
-        if articles_saved > 0:
-            try:
-                with open(completed_log, "a", encoding="utf-8") as fh:
-                    fh.write(f"{mbox_filename}\n")
-            except OSError as e:
-                logger.error("Failed to update %s: %s", completed_log, e)
+        if articles_errors > 0 or attempted < rows_to_fetch:
+            logger.warning(
+                "Pull of %s did not finish cleanly "
+                "(errors=%s attempted=%s/%s); not adding to %s",
+                mbox_filename,
+                articles_errors,
+                attempted,
+                rows_to_fetch,
+                completed_log,
+            )
+            return
+        mark_completed(completed_log, mbox_filename, logger)
     finally:
         writer.close()
         _ACTIVE_WRITER = None
@@ -390,6 +422,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--no-dedup", dest="dedup", action="store_false", help="Disable Message-ID deduplication")
     parser.set_defaults(dedup=True)
+    parser.add_argument(
+        "--skip-completed",
+        action="store_true",
+        help="Skip a group whose exact mbox job is already in completed_newsgroups.log "
+        "(off by default; re-pulls are incremental via Message-ID dedup)",
+    )
     parser.add_argument(
         "--plugin",
         action="append",
@@ -558,6 +596,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     conn_kwargs=conn_kwargs,
                     connections=args.connections,
                     pipeline_depth=args.pipeline_depth,
+                    skip_completed=args.skip_completed,
                 )
             except TerminatedBySignal:
                 logger.warning("Terminated while processing %s", group)

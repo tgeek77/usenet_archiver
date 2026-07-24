@@ -43,7 +43,7 @@ Python **3.9+**, **standard library only** (no `pip` packages required for the C
 - Discovers article ranges with **OVER / XOVER** (fallback **XHDR DATE**).
 - Fetches with **`--connections`** parallel sockets and **`--pipeline-depth`** pipelined `ARTICLE` commands.
 - Date window via **`--start-date`** / **`--end-date`** (`YYYY-MM-DD`). Omit end → through **today UTC**; omit start → from **1990-01-01**. Open-ended "since DATE" jobs include today's date in the mbox name, so the same request tomorrow is a **new pull**.
-- Writes **mbox** in **append** mode with **Message-ID dedup**; records jobs in **`completed_newsgroups.log`**.
+- Writes **mbox** in **append** mode with **Message-ID dedup**; records a job in **`completed_newsgroups.log` only after a successful, complete pull** (cancelled / errored runs are not recorded). Re-running is safe and **incremental** via Message-ID dedup. Use **`--skip-completed`** to hard-skip jobs already listed.
 - Article payloads stay **bytes** end to end; missing articles (`430`/`423`) are skipped.
 
 Paths for `.mbox`, `.log`, and `completed_newsgroups.log` are relative to the working directory.

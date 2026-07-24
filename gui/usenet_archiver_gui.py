@@ -86,6 +86,7 @@ class UsenetArchiverGUI:
             "connections": self.connections_var.get().strip(),
             "pipeline_depth": self.pipeline_var.get().strip(),
             "output_dir": self.output_var.get().strip(),
+            "skip_completed": bool(self.skip_completed_var.get()),
             "timeout": self.timeout_var.get().strip(),
         }
         try:
@@ -109,6 +110,7 @@ class UsenetArchiverGUI:
         self.connections_var.set(str(c.get("connections", "16")))
         self.pipeline_var.set(str(c.get("pipeline_depth", "32")))
         self.output_var.set(c.get("output_dir", str(Path.cwd())))
+        self.skip_completed_var.set(1 if c.get("skip_completed", False) else 0)
         self.timeout_var.set(str(c.get("timeout", "60")))
 
     # --- UI helpers --------------------------------------------------------
@@ -249,6 +251,7 @@ class UsenetArchiverGUI:
         self.connections_var = tk.StringVar(value="16")
         self.pipeline_var = tk.StringVar(value="32")
         self.output_var = tk.StringVar(value=str(Path.cwd()))
+        self.skip_completed_var = tk.IntVar(value=0)
 
         self._row(frame, "Newsgroup:", self.group_var)
         dates = ttk.Frame(frame)
@@ -289,6 +292,15 @@ class UsenetArchiverGUI:
         ttk.Button(out, text="Browse…", command=self._browse_output_dir).pack(
             side=tk.LEFT, padx=4
         )
+
+        skip_row = ttk.Frame(frame)
+        skip_row.pack(fill=tk.X, padx=5, pady=2)
+        ttk.Checkbutton(
+            skip_row,
+            text="Skip if this exact job was already completed "
+            "(off = re-run to catch up on new posts via dedup)",
+            variable=self.skip_completed_var,
+        ).pack(side=tk.LEFT)
 
         self.progress = ttk.Progressbar(frame, mode="indeterminate")
         self.progress.pack(fill=tk.X, padx=5, pady=6)
@@ -378,6 +390,12 @@ class UsenetArchiverGUI:
 
     def stop_pull(self) -> None:
         self._stop_event.set()
+        try:
+            import usenet_archiver.cli as cli_mod
+
+            cli_mod._TERMINATED = True
+        except Exception:
+            pass
         self._append_log("[Stop] cancel requested")
         self._set_status("Stopping…")
 
@@ -432,6 +450,7 @@ class UsenetArchiverGUI:
             "pipeline_depth": pipeline,
             "timeout": timeout,
             "output_dir": out,
+            "skip_completed": bool(self.skip_completed_var.get()),
         }
 
     def start_pull(self) -> None:
@@ -524,6 +543,7 @@ class UsenetArchiverGUI:
                             conn_kwargs=conn_kwargs,
                             connections=opts["connections"],
                             pipeline_depth=opts["pipeline_depth"],
+                            skip_completed=opts["skip_completed"],
                         )
                     except TerminatedBySignal:
                         return "cancelled"
