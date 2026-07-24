@@ -1,4 +1,5 @@
 .zipapp_stage/
+.appimage_stage/
 dist/
 __pycache__/
 *.py[cod]

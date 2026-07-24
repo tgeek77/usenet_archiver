@@ -2,42 +2,73 @@
 
 Tools for **text Usenet** archives:
 
-1. **`usenet_archiver/`** — NNTP client package (TLS/plain, OVER-based date discovery, multi-connection ARTICLE fetch → mbox).
-2. **`gui/usenet_archiver_gui.py`** — Tkinter GUI for pull jobs (githelper-style).
-3. **`extras/`** — Local INN tradspool helpers + **`gz2mbox.py`**.
+1. **`usenet_archiver/`** — NNTP client package + Tk GUI (TLS/plain, OVER-based date discovery, multi-connection ARTICLE fetch → mbox).
+2. **`extras/`** — Local INN tradspool helpers + **`gz2mbox.py`**.
 
 Nothing here is aimed at binary/NZB workflows.
 
 ---
 
-## Install / run (single-file zipapp)
+## Releases
 
-Same pattern as sword-cli: build one executable zipapp, copy onto `$PATH`.
+| Platform | Artifact |
+|----------|----------|
+| **Linux** | AppImage (`Usenet_Archiver-<ver>-x86_64.AppImage`) |
+| **OpenBSD / macOS / other** | Zipapp tarball (`usenet-archiver-<ver>-zipapp.tar.gz`) |
+
+GitHub Actions publishes both on tags matching `v*` (e.g. `v0.2.0`).
+
+```bash
+# Linux AppImage
+chmod +x Usenet_Archiver-*-x86_64.AppImage
+./Usenet_Archiver-*-x86_64.AppImage          # GUI
+./Usenet_Archiver-*-x86_64.AppImage -c --help  # CLI
+
+# Zipapp tarball (needs Python 3.9+ on PATH)
+tar xzf usenet-archiver-*-zipapp.tar.gz
+./usenet-archiver              # GUI (needs Tk)
+./usenet-archiver -c --help    # CLI (no Tk required)
+```
+
+OpenBSD: `pkg_add python3` (and the Tk bindings for your Python if you want the GUI).
+
+---
+
+## Install / run (local zipapp)
 
 ```bash
 make zipapp
 sudo cp dist/usenet-archiver /usr/local/bin/
-usenet-archiver --help
+usenet-archiver                # GUI
+usenet-archiver -c --help      # CLI
 ```
+
+`make appimage` builds the Linux AppImage locally (needs `python3-tk`, linuxdeploy, appimagetool).
 
 ### Development
 
 ```bash
-./bin/usenet-archiver --help          # prefers .venv if present
-python3 -m usenet_archiver --help
-python3 app/usenet_archiver.py --help # back-compat shim
-make gui                              # Tkinter GUI
+./bin/usenet-archiver          # GUI (prefers .venv if present)
+./bin/usenet-archiver -c --help
+python3 -m usenet_archiver -c --help
+make gui                       # same as python3 -m usenet_archiver
 ```
 
 Optional: `pip install .` installs the `usenet-archiver` console script (stdlib only; no deps).
 
 ### Dependencies
 
-Python **3.9+**, **standard library only** (no `pip` packages required for the CLI). The GUI needs Tk (`python3-tk` on some distros).
+Python **3.9+**, **standard library only** (no `pip` packages required for the CLI). The GUI needs Tk (`python3-tk` on Debian/Ubuntu; OpenBSD Tk packages for your Python). Use **`-c`** for CLI-only when Tk is missing.
 
 ---
 
 ## What the CLI does
+
+Invoke with **`-c`** before CLI options:
+
+```bash
+usenet-archiver -c --server news.example.com --newsgroup news.groups ...
+```
 
 - Opens NNTP (TLS default port **563**, or **`--no-ssl`** port **119**).
 - Discovers article ranges with **OVER / XOVER** (fallback **XHDR DATE**).
@@ -80,6 +111,7 @@ Password precedence: **flag > password-file > env > netrc**.
 | `--plugin SPEC` | Plugin (`name` or `name:arg:key=value`) |
 | `--connections N` | Parallel NNTP connections (default **8**) |
 | `--pipeline-depth N` | Pipelined ARTICLEs per connection (default **32**) |
+| `--skip-completed` | Skip jobs already in `completed_newsgroups.log` |
 | `--list-groups [WILDMAT]` | List groups and exit |
 | `--message-id ID` | Fetch one article to stdout |
 | `--post` | Post one RFC 5322 message from stdin |
@@ -87,7 +119,7 @@ Password precedence: **flag > password-file > env > netrc**.
 ### Example
 
 ```bash
-usenet-archiver \
+usenet-archiver -c \
   --server news.example.com \
   --username USER \
   --password-file ~/.nntp_pass \
@@ -123,11 +155,7 @@ Use a provider that allows automated bulk reading. Avoid hammering small free se
 
 ## GUI
 
-```bash
-make gui
-# or
-python3 gui/usenet_archiver_gui.py
-```
+Default when you run `usenet-archiver` (or `python3 -m usenet_archiver`) with no `-c`.
 
 Tkinter form for connection, credentials (prefer **password file**), newsgroup, dates, connections/pipeline, and output directory. Runs the pull in a **background thread** with a status line, indeterminate progress bar, scrollable log, and **Stop**. Settings save to **`~/.usenet_archiverrc`** (mode `0600`); the password field itself is not written to that file.
 
@@ -149,14 +177,19 @@ Tkinter form for connection, credentials (prefer **password file**), newsgroup, 
 ## Layout
 
 ```
-usenet_archiver/         # Installable package (CLI + library)
-  cli.py                 # argparse entry (run / main)
+usenet_archiver/         # Installable package (GUI + CLI + library)
+  app.py                 # Entry: GUI default, -c → CLI
+  gui.py                 # Tkinter GUI
+  cli.py                 # argparse CLI
   nntp.py fetch.py …     # NNTP, parallel fetch, overview, mbox, creds, plugins
-gui/usenet_archiver_gui.py
+gui/usenet_archiver_gui.py  # Thin back-compat shim
 bin/usenet-archiver      # Dev launcher
-scripts/build_zipapp.sh  # → dist/usenet-archiver
+scripts/build_zipapp.sh  # → dist/usenet-archiver + *-zipapp.tar.gz
+scripts/build_appimage.sh
+assets/                  # App icon for AppImage
 app/usenet_archiver.py   # Back-compat shim
 extras/                  # Tradspool helpers + gz2mbox
+.github/workflows/       # Release: AppImage + zipapp tarball
 tests/
 Makefile
 pyproject.toml

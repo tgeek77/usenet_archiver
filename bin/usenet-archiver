@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Dev launcher — run the package without installing.
+# Dev launcher — run the package without installing (GUI by default; -c for CLI).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 if [[ -x "$ROOT/.venv/bin/python" ]]; then

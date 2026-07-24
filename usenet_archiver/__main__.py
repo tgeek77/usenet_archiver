@@ -1,5 +1,5 @@
-"""Allow ``python -m usenet_archiver``."""
+"""Allow ``python -m usenet_archiver`` (GUI by default; ``-c`` for CLI)."""
 
-from .cli import run
+from .app import run
 
 run()

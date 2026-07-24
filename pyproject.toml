@@ -13,7 +13,7 @@ authors = [{ name = "Jason Evans" }]
 dependencies = []
 
 [project.scripts]
-usenet-archiver = "usenet_archiver.cli:run"
+usenet-archiver = "usenet_archiver.app:run"
 
 [tool.setuptools.packages.find]
 include = ["usenet_archiver*"]
