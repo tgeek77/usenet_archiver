@@ -1,0 +1,11 @@
+.zipapp_stage/
+.appimage_stage/
+dist/
+__pycache__/
+*.py[cod]
+.venv/
+*.mbox
+*.log
+.pytest_cache/
+*.egg-info/
+build/

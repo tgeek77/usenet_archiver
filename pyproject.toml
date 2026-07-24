@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "usenet-archiver"
+version = "0.2.0"
+description = "Fetch text Usenet groups over NNTP into mbox archives"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "BSD-2-Clause" }
+authors = [{ name = "Jason Evans" }]
+dependencies = []
+
+[project.scripts]
+usenet-archiver = "usenet_archiver.app:run"
+
+[tool.setuptools.packages.find]
+include = ["usenet_archiver*"]

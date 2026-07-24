@@ -1,99 +1,198 @@
 # Usenet Archiver
 
-This repository contains tools for working with **text Usenet** data in two different contexts:
+Tools for **text Usenet** archives:
 
-1. **`app/usenet_archiver.py`** — Connect to a remote NNTP service over TLS or plain NNTP, authenticate, and download articles from one newsgroup into a Unix **mbox** file.
-2. **`extras/`** — Bash helpers aimed at a **local news server** using **INN-style tradspool** storage under `/var/spool/news/articles/` (counts, ranking groups, monthly snapshots, crosspost stats).
+1. **`usenet_archiver/`** — NNTP client package + Tk GUI (TLS/plain, OVER-based date discovery, multi-connection ARTICLE fetch → mbox).
+2. **`extras/`** — Local INN tradspool helpers + **`gz2mbox.py`**.
 
-Nothing here is aimed at binary downloads or “NZB” workflows; the Python client is for **text archives**, research, and backups.
+Nothing here is aimed at binary/NZB workflows.
 
 ---
 
-## Python archiver (`app/usenet_archiver.py`)
+## Releases
+
+| Platform | Artifact |
+|----------|----------|
+| **Linux** | AppImage (`Usenet_Archiver-<ver>-x86_64.AppImage`) |
+| **OpenBSD / macOS / other** | Zipapp tarball (`usenet-archiver-<ver>-zipapp.tar.gz`) |
+
+GitHub Actions publishes both on tags matching `v*` (e.g. `v0.2.0`).
+
+```bash
+# Linux AppImage
+chmod +x Usenet_Archiver-*-x86_64.AppImage
+./Usenet_Archiver-*-x86_64.AppImage          # GUI
+./Usenet_Archiver-*-x86_64.AppImage -c --help  # CLI
+
+# Zipapp tarball (needs Python 3.9+ on PATH)
+tar xzf usenet-archiver-*-zipapp.tar.gz
+./usenet-archiver              # GUI (needs Tk)
+./usenet-archiver -c --help    # CLI (no Tk required)
+```
+
+OpenBSD: `pkg_add python3` (and the Tk bindings for your Python if you want the GUI).
+
+---
+
+## Install / run (local zipapp)
+
+```bash
+make zipapp
+sudo cp dist/usenet-archiver /usr/local/bin/
+usenet-archiver                # GUI
+usenet-archiver -c --help      # CLI
+```
+
+`make appimage` builds the Linux AppImage locally (needs `python3-tk`, linuxdeploy, appimagetool).
+
+### Development
+
+```bash
+./bin/usenet-archiver          # GUI (prefers .venv if present)
+./bin/usenet-archiver -c --help
+python3 -m usenet_archiver -c --help
+make gui                       # same as python3 -m usenet_archiver
+```
+
+Optional: `pip install .` installs the `usenet-archiver` console script (stdlib only; no deps).
 
 ### Dependencies
 
-Python **3.x**, **standard library only** (no `pip` packages).
+Python **3.9+**, **standard library only** (no `pip` packages required for the CLI). The GUI needs Tk (`python3-tk` on Debian/Ubuntu; OpenBSD Tk packages for your Python). Use **`-c`** for CLI-only when Tk is missing.
 
-### What it does
+---
 
-- Opens an NNTP connection (TLS by default, port **563**, or plain NNTP with **`--no-ssl`**, default port **119**).
-- Optionally restricts downloads with **`--start-date`** and **`--end-date`** (format **`YYYY-MM-DD`**). You may pass **only** `--start-date` (end defaults to **today, UTC**) or **only** `--end-date` (start defaults to **1990-01-01**). Passing **neither** fetches the full article-number range (no date filter in the initial range logic).
-- Writes articles into an **mbox** file and writes a **`.log`** file next to it (filenames include the date range when dates are used).
-- Appends the mbox filename to **`completed_newsgroups.log`** in the **current working directory** after a successful run so the same job can be skipped on rerun (remove the line from that file if you want to redownload).
+## What the CLI does
 
-Paths for `.mbox`, `.log`, and `completed_newsgroups.log` are **relative to where you run the command**.
-
-### Usage
+Invoke with **`-c`** before CLI options:
 
 ```bash
-python3 app/usenet_archiver.py -h
+usenet-archiver -c --server news.example.com --newsgroup news.groups ...
 ```
 
-```
-usage: usenet_archiver.py [-h] --server SERVER [--port PORT]
-                          --username USERNAME --password PASSWORD
-                          --newsgroup NEWSGROUP [--no-ssl] [--verbose]
-                          [--timeout TIMEOUT] [--start-date START_DATE]
-                          [--end-date END_DATE]
+- Opens NNTP (TLS default port **563**, or **`--no-ssl`** port **119**).
+- Discovers article ranges with **OVER / XOVER** (fallback **XHDR DATE**).
+- Fetches with **`--connections`** parallel sockets and **`--pipeline-depth`** pipelined `ARTICLE` commands.
+- Date window via **`--start-date`** / **`--end-date`** (`YYYY-MM-DD`). Omit end → through **today UTC**; omit start → from **1990-01-01**. Open-ended "since DATE" jobs include today's date in the mbox name, so the same request tomorrow is a **new pull**.
+- Writes **mbox** in **append** mode with **Message-ID dedup**; records a job in **`completed_newsgroups.log` only after a successful, complete pull** (cancelled / errored runs are not recorded). Re-running is safe and **incremental** via Message-ID dedup. Use **`--skip-completed`** to hard-skip jobs already listed.
+- Article payloads stay **bytes** end to end; missing articles (`430`/`423`) are skipped.
 
-Fetch NNTP articles and save to mbox
-```
+Paths for `.mbox`, `.log`, and `completed_newsgroups.log` are relative to the working directory.
+
+### Credential and server resolution
+
+| Source | Role |
+|--------|------|
+| `--server` / `$NNTPSERVER` / `/etc/news/server` | Host (optional `:port`); exit **2** if missing |
+| `--username` / `--password` | Explicit credentials |
+| `--password-file` | Password from a file (prefer over argv) |
+| `$NNTP_PASSWORD` | Password from the environment |
+| `~/.netrc` | Fallback (disable with **`--no-netrc`**) |
+
+Password precedence: **flag > password-file > env > netrc**.
+
+### Options
 
 | Option | Meaning |
 |--------|---------|
-| `--server` | NNTP hostname |
-| `--port` | Port (default: **563** with TLS, **119** with `--no-ssl`) |
-| `--username`, `--password` | NNTP credentials |
-| `--newsgroup` | Group name (e.g. `news.groups`) |
-| `--no-ssl` | Plain NNTP instead of TLS |
-| `--verbose` | Extra NNTP debugging on stderr |
-| `--timeout` | Socket timeout in seconds (default **60**) |
-| `--start-date`, `--end-date` | Inclusive date window; either may be omitted (**defaults**: missing end → today UTC; missing start → 1990-01-01) |
+| `--server` | Hostname or `host:port` |
+| `--port` | Port (default **563** TLS / **119** plain) |
+| `--username`, `--password` | Credentials (prefer `--password-file`) |
+| `--password-file` | Read password from file |
+| `--no-netrc` | Ignore `~/.netrc` |
+| `--newsgroup GROUP[>FILE]` | Group (repeatable; optional `group>filename`) |
+| `--groups-file FILE` | One `group[>filename]` per line |
+| `--no-ssl` | Plain NNTP |
+| `--verbose` / `--syslog` | Logging |
+| `--timeout` | Socket timeout (default **60**) |
+| `--start-date`, `--end-date` | Inclusive date window |
+| `--overview-chunk N` | OVER/XOVER chunk size (default **10000**) |
+| `--no-dedup` | Disable Message-ID dedup |
+| `--plugin SPEC` | Plugin (`name` or `name:arg:key=value`) |
+| `--connections N` | Parallel NNTP connections (default **8**) |
+| `--pipeline-depth N` | Pipelined ARTICLEs per connection (default **32**) |
+| `--skip-completed` | Skip jobs already in `completed_newsgroups.log` |
+| `--list-groups [WILDMAT]` | List groups and exit |
+| `--message-id ID` | Fetch one article to stdout |
+| `--post` | Post one RFC 5322 message from stdin |
 
 ### Example
 
 ```bash
-python3 app/usenet_archiver.py \
-  --verbose \
+usenet-archiver -c \
   --server news.example.com \
   --username USER \
-  --password PASS \
+  --password-file ~/.nntp_pass \
   --newsgroup news.groups \
-  --timeout 60 \
   --start-date 2021-01-01 \
-  --end-date 2022-01-01
+  --end-date 2022-01-01 \
+  --connections 32 \
+  --pipeline-depth 64
 ```
 
-TLS is the default; omit **`--no-ssl`** to keep TLS on port 563.
+### Plugins
+
+| Plugin | Effect |
+|--------|--------|
+| `strip_headers` | Delete headers (default `To,Cc,Bcc`) |
+| `mimify` | Default `Content-Type` if missing |
+| `keep_headers` | Keep listed headers; clear body |
+| `debug` | Print call args |
+
+### Tests
+
+```bash
+make test
+# or
+python3 -m unittest discover -s tests -v
+```
 
 ### Responsible use
 
-Use a **provider where your subscription allows automated bulk reading**. Avoid hammering small free servers that exist for casual posting. Paid/block providers are commonly discussed in communities such as [r/usenet](https://www.reddit.com/r/usenet/).
+Use a provider that allows automated bulk reading. Avoid hammering small free servers.
 
 ---
 
-## Extras (server-side, tradspool layout)
+## GUI
 
-These scripts assume a **Linux** (or similar) news host with article files under **`/var/spool/news/articles/`**. Several commands rely on **GNU** utilities (**GNU find** `-printf`, **`date -d`** not required but paths are GNU-centric). They are optional and independent of the Python client.
+Default when you run `usenet-archiver` (or `python3 -m usenet_archiver`) with no `-c`.
+
+Tkinter form for connection, credentials (prefer **password file**), newsgroup, dates, connections/pipeline, and output directory. Runs the pull in a **background thread** with a status line, indeterminate progress bar, scrollable log, and **Stop**. Settings save to **`~/.usenet_archiverrc`** (mode `0600`); the password field itself is not written to that file.
+
+---
+
+## Extras (tradspool)
 
 | Script | Purpose |
 |--------|---------|
-| **`extras/archive.sh`** | Interactive: given calendar month/year, **`rsync`**’s matching directory mtimes into `/tmp`, rearranges the tree, **`zip`**’s to `/opt/usenet/`, appends sizes to `/opt/usenet/archivelog.txt`. Uses **padded month/day** datetimes, **leap years** for February, and **end-of-day** (`23:59:59`) instead of an ambiguous midday cutoff. |
-| **`extras/report.sh`** | Counts articles per Big-8–style top-level tree and total spool size; writes a timestamped CSV-style report. Ensures **`${REPORT_DIR:-/srv/www/htdocs/reports}/archive`** exists. Override install root: `REPORT_DIR=/path ./extras/report.sh`. |
-| **`extras/biggestgroups.sh`** | Ranks directories by number of immediate child entries; produces Big-8–filtered and global top-50 / top-1000 lists, expire-header grep, and optional **`unwanted.log`** copy. Same **`REPORT_DIR`** convention as `report.sh`. |
-| **`extras/Big-8_Report.sh`** | Smaller variant: Big-8 ranking only, written to **`$HOME`** (no web directory). |
-| **`extras/crosspost_report.sh`** | Lists each article path with a **group count** derived from the **`Newsgroups:`** header (commas + 1). Sorts by that count descending; output **`$HOME/<timestamp>-sorted.csv`**. Uses **`mktemp`** instead of a fixed `/tmp` list. |
-
-Historical notes about public report URLs live in **`extras/README.md`**.
+| **`extras/archive.sh`** | Monthly spool zip under `/opt/usenet/` |
+| **`extras/report.sh`** | Hierarchy size report (`REPORT_DIR`) |
+| **`extras/biggestgroups.sh`** | Top groups / expire / unwanted |
+| **`extras/Big-8_Report.sh`** | Big-8 ranking → `$HOME` |
+| **`extras/crosspost_report.sh`** | Crosspost counts CSV |
+| **`extras/gz2mbox.py`** | `.gz` article dumps → mboxrd |
 
 ---
 
 ## Layout
 
 ```
-app/usenet_archiver.py   # NNTP → mbox client
-extras/*.sh              # Tradspool reporting and archival helpers
+usenet_archiver/         # Installable package (GUI + CLI + library)
+  app.py                 # Entry: GUI default, -c → CLI
+  gui.py                 # Tkinter GUI
+  cli.py                 # argparse CLI
+  nntp.py fetch.py …     # NNTP, parallel fetch, overview, mbox, creds, plugins
+gui/usenet_archiver_gui.py  # Thin back-compat shim
+bin/usenet-archiver      # Dev launcher
+scripts/build_zipapp.sh  # → dist/usenet-archiver + *-zipapp.tar.gz
+scripts/build_appimage.sh
+assets/                  # App icon for AppImage
+app/usenet_archiver.py   # Back-compat shim
+extras/                  # Tradspool helpers + gz2mbox
+.github/workflows/       # Release: AppImage + zipapp tarball
+tests/
+Makefile
+pyproject.toml
 LICENSE                  # BSD 2-Clause
 ```
 
