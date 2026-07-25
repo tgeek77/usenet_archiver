@@ -78,6 +78,22 @@ def collect_group_specs(newsgroups: Optional[List[str]], groups_file: Optional[s
     return specs
 
 
+def filter_binary_groups(
+    specs: List[Tuple[str, Optional[str]]], logger: Optional[logging.Logger] = None
+) -> List[Tuple[str, Optional[str]]]:
+    """Remove binary-looking groups; log each skip."""
+    from .policy import filter_group_specs
+
+    kept, skipped = filter_group_specs(specs)
+    if skipped and logger is not None:
+        for name in skipped:
+            logger.info("Skipping binary newsgroup %s", name)
+    elif skipped:
+        for name in skipped:
+            sys.stderr.write(f"Skipping binary newsgroup {name}\n")
+    return kept
+
+
 def normalize_date_range(start_date, end_date, verbose: bool = False, today=None):
     """Fill missing bounds: lone start → end=today UTC; lone end → start=1990-01-01.
 
@@ -189,6 +205,7 @@ def pull_group(
     connections: int = 8,
     pipeline_depth: int = 32,
     skip_completed: bool = False,
+    dry_run: bool = False,
 ) -> None:
     global _ACTIVE_WRITER
 
@@ -221,6 +238,9 @@ def pull_group(
     first, last, group_resp = client.group(group)
     logger.info("GROUP %s: %s (first=%s last=%s)", group, group_resp, first, last)
     if first == 0 and last == 0:
+        if dry_run:
+            logger.info("DRY-RUN: group %s is empty (would write %s)", group, mbox_filename)
+            return
         logger.info("Group %s is empty", group)
         mark_completed(completed_log, mbox_filename, logger)
         return
@@ -233,9 +253,40 @@ def pull_group(
         end_date,
         chunk_size=overview_chunk,
     )
-    logger.info("Overview matched %s articles for %s", len(rows), group)
+    overview_count = len(rows)
+    logger.info("Overview matched %s articles for %s", overview_count, group)
 
+    # Index existing mbox for dedup without opening for append (dry-run must not
+    # create or modify the mbox / completed log).
     writer = MboxWriter(mbox_filename, dedup=dedup, flush_every=100)
+    if dedup:
+        rows = [r for r in rows if not writer.has_message_id(r.message_id)]
+        logger.info("After dedup filter: %s articles to fetch", len(rows))
+
+    if dry_run:
+        date_note = ""
+        dated = [r.date for r in rows if getattr(r, "date", None) is not None]
+        if dated:
+            date_note = f", article dates {min(dated).date()} .. {max(dated).date()}"
+        plugin_note = f", plugins={len(plugins)}" if plugins else ""
+        logger.info(
+            "DRY-RUN: would fetch %s article(s) for %s → %s "
+            "(overview=%s, already_in_mbox=%s%s%s; no ARTICLE / mbox write)",
+            len(rows),
+            group,
+            mbox_filename,
+            overview_count,
+            overview_count - len(rows),
+            date_note,
+            plugin_note,
+        )
+        return
+
+    if not rows:
+        logger.info("Nothing to fetch for %s", group)
+        mark_completed(completed_log, mbox_filename, logger)
+        return
+
     _ACTIVE_WRITER = writer
     articles_saved = 0
     articles_skipped = 0
@@ -243,14 +294,6 @@ def pull_group(
     articles_errors = 0
     try:
         writer.open()
-        if dedup:
-            rows = [r for r in rows if not writer.has_message_id(r.message_id)]
-            logger.info("After dedup filter: %s articles to fetch", len(rows))
-
-        if not rows:
-            logger.info("Nothing to fetch for %s", group)
-            mark_completed(completed_log, mbox_filename, logger)
-            return
 
         def on_article(row, content, resp):
             nonlocal articles_saved, articles_skipped, articles_missing, articles_errors
@@ -372,98 +415,266 @@ def cmd_post(client: NNTPClient, newsgroups: List[str], plugins: list) -> int:
     return 0
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Fetch NNTP articles and save to mbox")
-    parser.add_argument("--server", help="NNTP server (host or host:port); default $NNTPSERVER or /etc/news/server")
-    parser.add_argument(
+def _connection_parser() -> argparse.ArgumentParser:
+    """Shared NNTP connection / logging options for all subcommands."""
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument(
+        "-s",
+        "--server",
+        help="NNTP server (host or host:port); default $NNTPSERVER or /etc/news/server",
+    )
+    p.add_argument(
+        "-P",
         "--port",
         type=int,
         default=None,
         help="NNTP server port (default: 563 with TLS, 119 for plain NNTP)",
     )
-    parser.add_argument("--username", help="Username for authentication")
-    parser.add_argument("--password", help="Password for authentication (prefer --password-file or $NNTP_PASSWORD)")
-    parser.add_argument("--password-file", help="Read password from file")
-    parser.add_argument("--no-netrc", dest="netrc", action="store_false", help="Ignore credentials in ~/.netrc")
-    parser.set_defaults(netrc=True)
+    p.add_argument(
+        "-u",
+        "--user",
+        "--username",
+        dest="username",
+        help="Username for authentication",
+    )
+    p.add_argument(
+        "--password",
+        help="Password for authentication (prefer --password-file or $NNTP_PASSWORD)",
+    )
+    p.add_argument(
+        "--password-file",
+        "--pass-file",
+        dest="password_file",
+        help="Path to a text file whose entire contents are the NNTP password "
+        "(trailing newline optional). Prefer this over --password.",
+    )
+    p.add_argument(
+        "--no-netrc",
+        dest="netrc",
+        action="store_false",
+        help="Ignore credentials in ~/.netrc",
+    )
+    p.set_defaults(netrc=True)
+    p.add_argument(
+        "--no-ssl",
+        dest="use_ssl",
+        action="store_false",
+        help="Disable TLS and use plain NNTP (typical port 119)",
+    )
+    p.set_defaults(use_ssl=True)
+    p.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")
+    p.add_argument("--syslog", action="store_true", help="Also log to syslog (LOG_NEWS)")
+    p.add_argument(
+        "-t",
+        "--timeout",
+        type=int,
+        default=60,
+        help="Timeout for operations (seconds)",
+    )
+    return p
 
+
+def build_parser() -> argparse.ArgumentParser:
+    from . import __version__
+
+    conn = _connection_parser()
+    parser = argparse.ArgumentParser(
+        prog="usenet-archiver -c",
+        description="NNTP text archiver CLI (use subcommands). GUI is the default without -c.",
+        epilog=(
+            "Examples:\n"
+            "  usenet-archiver -c pull -s news.example.com -u alice -g news.groups -n\n"
+            "  usenet-archiver -c list-groups 'comp.*'\n"
+            "  usenet-archiver -c get '<mid@example.com>'\n"
+            "  usenet-archiver -c post -g misc.test < msg.eml\n"
+            "\n"
+            "Without -c, usenet-archiver launches the GUI. "
+            "Top-level --help / --version work without -c.\n"
+            "Short and long forms are interchangeable (e.g. -s/--server, -u/--user)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument(
+        "-V",
+        "--version",
+        action="version",
+        version=f"usenet-archiver {__version__}",
+    )
+
+    sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
+
+    # --- pull ------------------------------------------------------------
+    pull = sub.add_parser(
+        "pull",
+        parents=[conn],
+        help="Fetch articles into mbox (overview + ARTICLE)",
+        description="Fetch newsgroup articles into mbox archives.",
+    )
+    pull.add_argument(
+        "-g",
+        "--group",
         "--newsgroup",
         action="append",
         dest="newsgroups",
         metavar="GROUP[>FILE]",
         help="Newsgroup to fetch (repeatable; optional group>filename)",
     )
-    parser.add_argument("--groups-file", help="File with one group[>filename] per line")
-
-    parser.add_argument(
-        "--no-ssl",
-        dest="use_ssl",
-        action="store_false",
-        help="Disable TLS and use plain NNTP (typical port 119)",
+    pull.add_argument(
+        "-f",
+        "--file",
+        "--groups-file",
+        dest="groups_file",
+        help="File with one group[>filename] per line",
     )
-    parser.set_defaults(use_ssl=True)
-    parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
-    parser.add_argument("--syslog", action="store_true", help="Also log to syslog (LOG_NEWS)")
-    parser.add_argument("--timeout", type=int, default=60, help="Timeout for operations (seconds)")
-    parser.add_argument(
+    pull.add_argument(
+        "--start",
         "--start-date",
+        dest="start_date",
         help="Start date (YYYY-MM-DD). May be used alone; end defaults to today (UTC).",
     )
-    parser.add_argument(
+    pull.add_argument(
+        "--end",
         "--end-date",
+        dest="end_date",
         help="End date (YYYY-MM-DD). May be used alone; start defaults to 1990-01-01.",
     )
-    parser.add_argument(
+    pull.add_argument(
         "--overview-chunk",
         type=int,
         default=10000,
         help="OVER/XOVER chunk size for date scanning (default 10000)",
     )
-    parser.add_argument("--no-dedup", dest="dedup", action="store_false", help="Disable Message-ID deduplication")
-    parser.set_defaults(dedup=True)
-    parser.add_argument(
+    pull.add_argument(
+        "--no-dedup",
+        dest="dedup",
+        action="store_false",
+        help="Disable Message-ID deduplication",
+    )
+    pull.set_defaults(dedup=True)
+    pull.add_argument(
         "--skip-completed",
         action="store_true",
-        help="Skip a group whose exact mbox job is already in completed_newsgroups.log "
-        "(off by default; re-pulls are incremental via Message-ID dedup)",
+        help="Skip a group whose exact mbox job is already in completed_newsgroups.log",
     )
-    parser.add_argument(
+    pull.add_argument(
+        "-n",
+        "--dry-run",
+        action="store_true",
+        help="Plan only: overview + dedup; no ARTICLE download or mbox write",
+    )
+    pull.add_argument(
         "--plugin",
         action="append",
         default=[],
         metavar="PLUGIN",
         help="Apply plugin (name or name:arg:key=value); repeatable",
     )
-    parser.add_argument(
+    pull.add_argument(
+        "-C",
         "--connections",
         type=int,
         default=8,
         metavar="N",
-        help="Parallel NNTP connections for ARTICLE fetch (default 8; max depends on provider)",
+        help="Parallel NNTP connections for ARTICLE fetch (default 8)",
     )
-    parser.add_argument(
+    pull.add_argument(
+        "-D",
+        "--depth",
         "--pipeline-depth",
+        dest="pipeline_depth",
         type=int,
         default=32,
         metavar="N",
-        help="ARTICLE commands to pipeline per connection before reading (default 32)",
+        help="ARTICLE commands to pipeline per connection (default 32)",
     )
 
-    mode = parser.add_mutually_exclusive_group()
-
-    mode.add_argument(
-        "--list-groups",
+    # --- list-groups -----------------------------------------------------
+    lg = sub.add_parser(
+        "list-groups",
+        parents=[conn],
+        help="List available newsgroups",
+        description="List newsgroups from the server (optional wildmat).",
+    )
+    lg.add_argument(
+        "wildmat",
         nargs="?",
-        const="",
         default=None,
-        metavar="WILDMAT",
-        help="List available groups (optional wildmat) and exit",
+        help="Optional wildmat pattern (e.g. 'comp.lang.*')",
     )
-    mode.add_argument("--message-id", metavar="ID", help="Fetch one article by Message-ID to stdout")
-    mode.add_argument("--post", action="store_true", help="Post one RFC 5322 message from stdin")
+
+    # --- get -------------------------------------------------------------
+    getp = sub.add_parser(
+        "get",
+        parents=[conn],
+        help="Fetch one article by Message-ID to stdout",
+        description="Fetch a single article by Message-ID and write it to stdout.",
+    )
+    getp.add_argument(
+        "message_id",
+        help="Message-ID (with or without surrounding <angle brackets>)",
+    )
+
+    # --- post ------------------------------------------------------------
+    post = sub.add_parser(
+        "post",
+        parents=[conn],
+        help="Post one RFC 5322 message from stdin",
+        description="Read one message from stdin and POST it.",
+    )
+    post.add_argument(
+        "-g",
+        "--group",
+        "--newsgroup",
+        action="append",
+        dest="newsgroups",
+        metavar="GROUP",
+        help="Newsgroup(s) if the message has no Newsgroups header",
+    )
+    post.add_argument(
+        "--plugin",
+        action="append",
+        default=[],
+        metavar="PLUGIN",
+        help="Apply plugin (name or name:arg:key=value); repeatable",
+    )
 
     return parser
+
+
+def _resolve_endpoint(args):
+    return resolve_credentials(
+        server=args.server,
+        port=args.port,
+        username=args.username,
+        password=args.password,
+        password_file=args.password_file,
+        use_netrc=args.netrc,
+        use_ssl=args.use_ssl,
+    )
+
+
+def _connect_client(args, endpoint) -> NNTPClient:
+    client = NNTPClient(
+        server=endpoint.host,
+        port=endpoint.port,
+        username=endpoint.username,
+        password=endpoint.password,
+        use_ssl=args.use_ssl,
+        verbose=args.verbose,
+        timeout=args.timeout,
+    )
+    client.connect()
+    return client
+
+
+def _parse_plugins(specs: List[str], parser: argparse.ArgumentParser) -> list:
+    plugins: List[Callable] = []
+    for spec in specs or []:
+        try:
+            plugins.append(parse_plugin_spec(spec))
+        except ValueError as e:
+            parser.error(str(e))
+    return plugins
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -475,34 +686,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     _STOP_EVENT = threading.Event()
     signal.signal(signal.SIGTERM, _handle_sigterm)
 
-    if args.connections < 1:
-        parser.error("--connections must be >= 1")
-    if args.pipeline_depth < 1:
-        parser.error("--pipeline-depth must be >= 1")
-    if args.connections > 99:
-        # Soft warning only — some providers allow 99+.
-        sys.stderr.write(
-            f"Warning: --connections {args.connections} is high; "
-            "check your provider's concurrent-connection limit.\n"
-        )
-
     try:
-        endpoint = resolve_credentials(
-            server=args.server,
-            port=args.port,
-            username=args.username,
-            password=args.password,
-            password_file=args.password_file,
-            use_netrc=args.netrc,
-            use_ssl=args.use_ssl,
-        )
+        endpoint = _resolve_endpoint(args)
     except SystemExit as e:
         if e.code == 2:
             sys.stderr.write(
-                "No NNTP server specified. Use --server, set $NNTPSERVER, or create /etc/news/server.\n"
+                "No NNTP server specified. Use --server / -s, set $NNTPSERVER, "
+                "or create /etc/news/server.\n"
             )
             return 2
         raise
+    except ValueError as e:
+        sys.stderr.write(f"{e}\n")
+        return 2
     except FileNotFoundError as e:
         sys.stderr.write(f"Password file error: {e}\n")
         return 2
@@ -510,67 +706,72 @@ def main(argv: Optional[List[str]] = None) -> int:
         sys.stderr.write(f"Connection/config error: {e}\n")
         return 3
 
-    start_date = parse_date(args.start_date) if args.start_date else None
-    end_date = parse_date(args.end_date) if args.end_date else None
-    try:
-        start_date, end_date = normalize_date_range(start_date, end_date, verbose=args.verbose)
-    except ValueError as e:
-        parser.error(str(e).replace("start date", "--start-date").replace("end date", "--end-date"))
-
-    plugins: List[Callable] = []
-    for spec in args.plugin:
-        try:
-            plugins.append(parse_plugin_spec(spec))
-        except ValueError as e:
-            parser.error(str(e))
-
-    is_pull = args.list_groups is None and args.message_id is None and not args.post
-    group_specs = collect_group_specs(args.newsgroups, args.groups_file)
-    if is_pull and not group_specs:
-        parser.error("pull mode requires --newsgroup and/or --groups-file")
-
     logger = setup_logging(args.verbose, args.syslog)
 
-    client = NNTPClient(
-        server=endpoint.host,
-        port=endpoint.port,
-        username=endpoint.username,
-        password=endpoint.password,
-        use_ssl=args.use_ssl,
-        verbose=args.verbose,
-        timeout=args.timeout,
-    )
-
     try:
-        client.connect()
+        client = _connect_client(args, endpoint)
     except (NNTPError, OSError) as e:
         sys.stderr.write(f"Connection failed: {e}\n")
         return 3
 
     try:
-        if args.list_groups is not None:
-            wildmat = args.list_groups or None
-            return cmd_list_groups(client, wildmat)
+        if args.command == "list-groups":
+            return cmd_list_groups(client, args.wildmat)
 
-        if args.message_id is not None:
+        if args.command == "get":
             try:
                 return cmd_get_message(client, args.message_id)
             except ValueError as e:
                 sys.stderr.write(f"{e}\n")
                 return 4
 
-        if args.post:
+        if args.command == "post":
+            plugins = _parse_plugins(args.plugin, parser)
+            group_specs = collect_group_specs(args.newsgroups, None)
             groups = [g for g, _ in group_specs]
             return cmd_post(client, groups, plugins)
 
-        # Default: pull
+        # pull
+        if args.connections < 1:
+            parser.error("--connections must be >= 1")
+        if args.pipeline_depth < 1:
+            parser.error("--pipeline-depth must be >= 1")
+        if args.connections > 99:
+            sys.stderr.write(
+                f"Warning: --connections {args.connections} is high; "
+                "check your provider's concurrent-connection limit.\n"
+            )
+
+        start_date = parse_date(args.start_date) if args.start_date else None
+        end_date = parse_date(args.end_date) if args.end_date else None
+        try:
+            start_date, end_date = normalize_date_range(
+                start_date, end_date, verbose=args.verbose
+            )
+        except ValueError as e:
+            parser.error(
+                str(e)
+                .replace("start date", "--start-date")
+                .replace("end date", "--end-date")
+            )
+
+        plugins = _parse_plugins(args.plugin, parser)
+        group_specs = collect_group_specs(args.newsgroups, args.groups_file)
+        group_specs = filter_binary_groups(group_specs, logger=logger)
+        if not group_specs:
+            parser.error(
+                "pull requires -g/--newsgroup and/or -f/--groups-file "
+                "(after skipping binary groups)"
+            )
+
         completed_log = "completed_newsgroups.log"
         for group, filename in group_specs:
             mbox_filename = mbox_name_for(group, filename, start_date, end_date)
             log_filename = mbox_filename.rsplit(".", 1)[0] + ".log"
-            # Per-group file log
             file_handler = logging.FileHandler(log_filename)
-            file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+            file_handler.setFormatter(
+                logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+            )
             logging.getLogger().addHandler(file_handler)
             conn_kwargs = {
                 "server": endpoint.host,
@@ -597,13 +798,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                     connections=args.connections,
                     pipeline_depth=args.pipeline_depth,
                     skip_completed=args.skip_completed,
+                    dry_run=args.dry_run,
                 )
             except TerminatedBySignal:
                 logger.warning("Terminated while processing %s", group)
                 return 4
             except Exception as e:
                 logger.error("Failed group %s: %s", group, e)
-                # Continue with remaining groups
             finally:
                 logging.getLogger().removeHandler(file_handler)
                 file_handler.close()
