@@ -72,7 +72,8 @@ Usenet Archiver ${VERSION} (zipapp)
 Requires Python 3.9+ on PATH (shebang: /usr/bin/env python3).
 
   ./usenet-archiver              # Tk GUI (needs Tk / python3-tk)
-  ./usenet-archiver -c --help    # CLI only (no Tk required)
+  ./usenet-archiver -c pull -h   # CLI pull help (no Tk required)
+  ./usenet-archiver --help       # top-level help (no -c)
 
 OpenBSD: pkg_add python3; GUI needs the Tk bindings for your Python version.
 Linux: prefer the AppImage release if available; this zipapp also works.
@@ -81,4 +82,4 @@ tar -C "${PACK_DIR}" -czf "${TARBALL}" usenet-archiver README.txt
 rm -rf "${PACK_DIR}"
 echo "Built ${TARBALL}"
 
-echo "Try: ${OUT} -c --help"
+echo "Try: ${OUT} -c pull --help"

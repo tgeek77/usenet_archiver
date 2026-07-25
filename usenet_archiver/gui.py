@@ -14,11 +14,12 @@ import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .cli import pull_group
 from .creds import resolve_credentials
 from .nntp import NNTPClient
+from . import __version__
 
 CONFIG_PATH = Path.home() / ".usenet_archiverrc"
 
@@ -43,7 +44,7 @@ class UsenetArchiverGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Usenet Archiver")
-        self.root.geometry("920x640")
+        self.root.geometry("920x720")
 
         self.config = self.load_config()
         self._active_tasks = 0
@@ -74,7 +75,7 @@ class UsenetArchiverGUI:
             "username": self.user_var.get().strip(),
             "password_file": self.password_file_var.get().strip(),
             "use_ssl": bool(self.ssl_var.get()),
-            "newsgroup": self.group_var.get().strip(),
+            "newsgroups": self._groups_from_listbox(),
             "start_date": self.start_var.get().strip(),
             "end_date": self.end_var.get().strip(),
             "connections": self.connections_var.get().strip(),
@@ -98,7 +99,10 @@ class UsenetArchiverGUI:
         self.user_var.set(c.get("username", ""))
         self.password_file_var.set(c.get("password_file", ""))
         self.ssl_var.set(1 if c.get("use_ssl", True) else 0)
-        self.group_var.set(c.get("newsgroup", ""))
+        groups = c.get("newsgroups")
+        if not groups and c.get("newsgroup"):
+            groups = [c.get("newsgroup")]
+        self._set_groups_list(groups or [])
         self.start_var.set(c.get("start_date", ""))
         self.end_var.set(c.get("end_date", ""))
         self.connections_var.set(str(c.get("connections", "16")))
@@ -106,6 +110,17 @@ class UsenetArchiverGUI:
         self.output_var.set(c.get("output_dir", str(Path.cwd())))
         self.skip_completed_var.set(1 if c.get("skip_completed", False) else 0)
         self.timeout_var.set(str(c.get("timeout", "60")))
+
+    def _groups_from_listbox(self) -> List[str]:
+        return list(self.groups_list.get(0, tk.END))
+
+    def _set_groups_list(self, groups: List[str]) -> None:
+        self.groups_list.delete(0, tk.END)
+        for g in groups:
+            g = (g or "").strip()
+            if g:
+                self.groups_list.insert(tk.END, g)
+        self._update_job_preview()
 
     # --- UI helpers --------------------------------------------------------
 
@@ -130,6 +145,7 @@ class UsenetArchiverGUI:
         self._set_status(status)
         self._append_log(f"[{label}] started")
         self.run_btn.configure(state=tk.DISABLED)
+        self.dry_run_btn.configure(state=tk.DISABLED)
         self.stop_btn.configure(state=tk.NORMAL)
 
         def runner():
@@ -143,6 +159,7 @@ class UsenetArchiverGUI:
             def finish():
                 self._active_tasks -= 1
                 self.run_btn.configure(state=tk.NORMAL)
+                self.dry_run_btn.configure(state=tk.NORMAL)
                 self.stop_btn.configure(state=tk.DISABLED)
                 if error is not None:
                     err_text = str(error)
@@ -180,10 +197,12 @@ class UsenetArchiverGUI:
             text=(
                 "Usenet Archiver GUI\n\n"
                 "Fetches text newsgroups over NNTP into mbox files.\n"
-                "Settings are saved to ~/.usenet_archiverrc (mode 0600).\n"
-                "Prefer a password file path over typing passwords\n"
-                "into the form when possible.\n\n"
-                "CLI: usenet-archiver -c  |  Dev: ./bin/usenet-archiver -c"
+                "Settings are saved to ~/.usenet_archiverrc (mode 0600).\n\n"
+                "Password file: a plain-text file whose entire contents are\n"
+                "the NNTP password. One line is best; a trailing newline is\n"
+                "ignored. Prefer this over typing a password into the form.\n\n"
+                f"Version {__version__}\n"
+                "CLI: usenet-archiver -c pull …  |  Dev: ./bin/usenet-archiver -c pull"
             ),
             justify=tk.LEFT,
         ).pack(anchor=tk.W, padx=16, pady=16)
@@ -208,14 +227,26 @@ class UsenetArchiverGUI:
         self.ssl_var = tk.IntVar(value=1)
         self.timeout_var = tk.StringVar(value="60")
 
-        self._row(frame, "Server:", self.server_var)
-        self._row(frame, "Port:", self.port_var, width=8)
-        self._row(frame, "Username:", self.user_var)
+        host_row = ttk.Frame(frame)
+        host_row.pack(fill=tk.X, padx=5, pady=2)
+        ttk.Label(host_row, text="Server:", width=16).pack(side=tk.LEFT)
+        ttk.Entry(host_row, textvariable=self.server_var).pack(
+            side=tk.LEFT, fill=tk.X, expand=True
+        )
+        ttk.Label(host_row, text="Port:").pack(side=tk.LEFT, padx=(8, 4))
+        port_entry = ttk.Entry(host_row, textvariable=self.port_var, width=6)
+        port_entry.pack(side=tk.LEFT)
+        vcmd = (self.root.register(self._validate_port_digits), "%P")
+        port_entry.configure(validate="key", validatecommand=vcmd)
 
-        pass_row = ttk.Frame(frame)
-        pass_row.pack(fill=tk.X, padx=5, pady=2)
-        ttk.Label(pass_row, text="Password:", width=16).pack(side=tk.LEFT)
-        ttk.Entry(pass_row, textvariable=self.password_var, show="*", width=28).pack(
+        cred_row = ttk.Frame(frame)
+        cred_row.pack(fill=tk.X, padx=5, pady=2)
+        ttk.Label(cred_row, text="Username:", width=16).pack(side=tk.LEFT)
+        ttk.Entry(cred_row, textvariable=self.user_var, width=18).pack(
+            side=tk.LEFT, fill=tk.X, expand=True
+        )
+        ttk.Label(cred_row, text="Password:").pack(side=tk.LEFT, padx=(8, 4))
+        ttk.Entry(cred_row, textvariable=self.password_var, show="*", width=18).pack(
             side=tk.LEFT, fill=tk.X, expand=True
         )
 
@@ -229,11 +260,22 @@ class UsenetArchiverGUI:
             side=tk.LEFT, padx=4
         )
 
+        ttk.Label(
+            frame,
+            text="Password file = plain text containing only the NNTP password "
+            "(one line; trailing newline OK).",
+        ).pack(fill=tk.X, padx=5, pady=(0, 2))
+
         opts = ttk.Frame(frame)
         opts.pack(fill=tk.X, padx=5, pady=4)
         ttk.Checkbutton(opts, text="TLS (NNTPS)", variable=self.ssl_var).pack(side=tk.LEFT)
         ttk.Label(opts, text="Timeout (s):").pack(side=tk.LEFT, padx=(16, 4))
         ttk.Entry(opts, textvariable=self.timeout_var, width=6).pack(side=tk.LEFT)
+
+    def _validate_port_digits(self, proposed: str) -> bool:
+        if proposed == "":
+            return True
+        return proposed.isdigit() and len(proposed) <= 6
 
     def _build_job_frame(self, parent) -> None:
         frame = ttk.LabelFrame(parent, text="Archive job")
@@ -247,7 +289,36 @@ class UsenetArchiverGUI:
         self.output_var = tk.StringVar(value=str(Path.cwd()))
         self.skip_completed_var = tk.IntVar(value=0)
 
-        self._row(frame, "Newsgroup:", self.group_var)
+        add_row = ttk.Frame(frame)
+        add_row.pack(fill=tk.X, padx=5, pady=2)
+        ttk.Label(add_row, text="Newsgroup:", width=16).pack(side=tk.LEFT)
+        group_entry = ttk.Entry(add_row, textvariable=self.group_var)
+        group_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        group_entry.bind("<Return>", lambda _e: self._add_group())
+        ttk.Button(add_row, text="Add", command=self._add_group).pack(side=tk.LEFT, padx=4)
+
+        list_row = ttk.Frame(frame)
+        list_row.pack(fill=tk.BOTH, expand=True, padx=5, pady=2)
+        ttk.Label(list_row, text="Queue:", width=16).pack(side=tk.LEFT, anchor=tk.N)
+        list_wrap = ttk.Frame(list_row)
+        list_wrap.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.groups_list = tk.Listbox(list_wrap, height=5, exportselection=False)
+        scroll = ttk.Scrollbar(list_wrap, command=self.groups_list.yview)
+        self.groups_list.configure(yscrollcommand=scroll.set)
+        self.groups_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        btns = ttk.Frame(list_row)
+        btns.pack(side=tk.LEFT, padx=4, anchor=tk.N)
+        ttk.Button(btns, text="Import…", command=self._import_groups_file).pack(fill=tk.X, pady=1)
+        ttk.Button(btns, text="Remove", command=self._remove_selected_groups).pack(fill=tk.X, pady=1)
+        ttk.Button(btns, text="Clear", command=self._clear_groups).pack(fill=tk.X, pady=1)
+
+        ttk.Label(
+            frame,
+            text="Import: one newsgroup per line (# comments allowed). "
+            "Names containing “binary” (and common variants) are skipped.",
+        ).pack(fill=tk.X, padx=5, pady=(0, 2))
+
         dates = ttk.Frame(frame)
         dates.pack(fill=tk.X, padx=5, pady=2)
         ttk.Label(dates, text="Start date:", width=16).pack(side=tk.LEFT)
@@ -269,7 +340,6 @@ class UsenetArchiverGUI:
         )
         self.start_var.trace_add("write", lambda *_: self._update_job_preview())
         self.end_var.trace_add("write", lambda *_: self._update_job_preview())
-        self.group_var.trace_add("write", lambda *_: self._update_job_preview())
         self.root.after(0, self._update_job_preview)
 
         perf = ttk.Frame(frame)
@@ -304,6 +374,8 @@ class UsenetArchiverGUI:
         row.pack(fill=tk.X, padx=10, pady=4)
         self.run_btn = ttk.Button(row, text="Run pull", command=self.start_pull)
         self.run_btn.pack(side=tk.LEFT, padx=(0, 6))
+        self.dry_run_btn = ttk.Button(row, text="Dry run", command=self.start_dry_run)
+        self.dry_run_btn.pack(side=tk.LEFT, padx=(0, 6))
         self.stop_btn = ttk.Button(row, text="Stop", command=self.stop_pull, state=tk.DISABLED)
         self.stop_btn.pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(row, text="Save settings", command=self.save_config).pack(side=tk.LEFT, padx=(0, 6))
@@ -354,13 +426,79 @@ class UsenetArchiverGUI:
         if path:
             self.output_var.set(path)
 
+    def _add_group(self) -> None:
+        from .policy import is_binary_newsgroup
+
+        name = self.group_var.get().strip()
+        if not name:
+            return
+        if is_binary_newsgroup(name):
+            messagebox.showwarning(
+                "Binary group",
+                f"Skipping {name} (looks like a binary newsgroup).",
+            )
+            self.group_var.set("")
+            return
+        existing = set(self._groups_from_listbox())
+        if name not in existing:
+            self.groups_list.insert(tk.END, name)
+        self.group_var.set("")
+        self._update_job_preview()
+
+    def _remove_selected_groups(self) -> None:
+        for idx in reversed(self.groups_list.curselection()):
+            self.groups_list.delete(idx)
+        self._update_job_preview()
+
+    def _clear_groups(self) -> None:
+        self.groups_list.delete(0, tk.END)
+        self._update_job_preview()
+
+    def _import_groups_file(self) -> None:
+        from .policy import is_binary_newsgroup, read_groups_file
+
+        path = filedialog.askopenfilename(
+            title="Import newsgroups (one per line)",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            lines = read_groups_file(path)
+        except OSError as e:
+            messagebox.showerror("Import failed", str(e))
+            return
+        existing = set(self._groups_from_listbox())
+        added = 0
+        skipped_bin = 0
+        for line in lines:
+            # Accept bare group or group>filename — queue uses the group name only
+            # for display; filename override is CLI-oriented. Keep full line if
+            # it has no '>', else group part for the list.
+            group = line.split(">", 1)[0].strip()
+            if not group:
+                continue
+            if is_binary_newsgroup(group):
+                skipped_bin += 1
+                self._append_log(f"Skipping binary newsgroup {group}")
+                continue
+            if group not in existing:
+                self.groups_list.insert(tk.END, group)
+                existing.add(group)
+                added += 1
+        self._update_job_preview()
+        msg = f"Imported {added} newsgroup(s)."
+        if skipped_bin:
+            msg += f" Skipped {skipped_bin} binary name(s)."
+        self._append_log(msg)
+
     def _update_job_preview(self) -> None:
         """Show the resolved date window and mbox name for the current fields."""
         from datetime import datetime
 
         from usenet_archiver.cli import mbox_name_for, normalize_date_range
 
-        group = self.group_var.get().strip() or "<newsgroup>"
+        groups = self._groups_from_listbox()
         start_s = self.start_var.get().strip() or None
         end_s = self.end_var.get().strip() or None
         try:
@@ -370,15 +508,20 @@ class UsenetArchiverGUI:
         except ValueError:
             self.job_preview_var.set("Output: (fix date)")
             return
-        name = mbox_name_for(group, None, start, end)
+        if not groups:
+            self.job_preview_var.set("Output: (add at least one newsgroup)")
+            return
+        sample = groups[0]
+        name = mbox_name_for(sample, None, start, end)
+        extra = f" (+{len(groups) - 1} more)" if len(groups) > 1 else ""
         if start and end:
             open_ended = not end_s and bool(start_s)
             note = " — end defaults to today UTC" if open_ended else ""
             self.job_preview_var.set(
-                f"Output: {name}  ({start.date()} .. {end.date()}{note})"
+                f"Output: {name}{extra}  ({start.date()} .. {end.date()}{note})"
             )
         else:
-            self.job_preview_var.set(f"Output: {name}  (full group range)")
+            self.job_preview_var.set(f"Output: {name}{extra}  (full group range)")
 
     # --- actions -----------------------------------------------------------
 
@@ -394,14 +537,32 @@ class UsenetArchiverGUI:
         self._set_status("Stopping…")
 
     def _validate(self) -> Dict[str, Any]:
+        from .creds import split_host
+        from .policy import check_server_allowed, is_binary_newsgroup
+
         server = self.server_var.get().strip()
-        group = self.group_var.get().strip()
+        groups = [g for g in self._groups_from_listbox() if g.strip()]
+        # Allow typing a group without pressing Add.
+        pending = self.group_var.get().strip()
+        if pending and pending not in groups:
+            if is_binary_newsgroup(pending):
+                raise ValueError(f"Skipping {pending} (looks like a binary newsgroup).")
+            groups.append(pending)
         if not server:
             raise ValueError("Server is required.")
-        if not group:
-            raise ValueError("Newsgroup is required.")
+        try:
+            host, _ = split_host(server, default_port=None)
+        except ValueError as e:
+            raise ValueError(f"Invalid server: {e}") from e
+        check_server_allowed(host)
+        if not groups:
+            raise ValueError("Add at least one newsgroup (or import a list).")
         port_s = self.port_var.get().strip()
+        if port_s and (not port_s.isdigit() or len(port_s) > 6):
+            raise ValueError("Port must be at most 6 digits.")
         port = int(port_s) if port_s else None
+        if port is not None and not (1 <= port <= 65535):
+            raise ValueError("Port must be between 1 and 65535.")
         try:
             connections = int(self.connections_var.get().strip() or "8")
             pipeline = int(self.pipeline_var.get().strip() or "32")
@@ -437,7 +598,7 @@ class UsenetArchiverGUI:
             "password": self.password_var.get() or None,
             "password_file": self.password_file_var.get().strip() or None,
             "use_ssl": bool(self.ssl_var.get()),
-            "group": group,
+            "groups": groups,
             "start_date": start_date,
             "end_date": end_date,
             "connections": connections,
@@ -447,13 +608,19 @@ class UsenetArchiverGUI:
             "skip_completed": bool(self.skip_completed_var.get()),
         }
 
-    def start_pull(self) -> None:
+    def start_dry_run(self) -> None:
+        self.start_pull(dry_run=True)
+
+    def start_pull(self, dry_run: bool = False) -> None:
         try:
             opts = self._validate()
         except ValueError as e:
             messagebox.showwarning("Validation", str(e))
             return
 
+        # Sync pending single-group entry into the listbox for persistence.
+        self._set_groups_list(opts["groups"])
+        self.group_var.set("")
         self.save_config()
         self._stop_event = threading.Event()
         self._run_gen += 1
@@ -470,15 +637,19 @@ class UsenetArchiverGUI:
         logger.setLevel(logging.INFO)
         logger.addHandler(self._log_handler)
 
+        label = "Dry run" if dry_run else "Pull"
+
         def work():
             # Import stop globals used by pull_group / fetch
             import usenet_archiver.cli as cli_mod
             from usenet_archiver.cli import TerminatedBySignal, mbox_name_for
+            from usenet_archiver.policy import is_binary_newsgroup
 
             cli_mod._STOP_EVENT = self._stop_event
             cli_mod._TERMINATED = False
 
             cwd = os.getcwd()
+            written = []
             try:
                 os.chdir(opts["output_dir"])
                 endpoint = resolve_credentials(
@@ -512,36 +683,48 @@ class UsenetArchiverGUI:
                         "verbose": False,
                         "timeout": opts["timeout"],
                     }
-                    mbox_filename = mbox_name_for(
-                        opts["group"], None, opts["start_date"], opts["end_date"]
-                    )
-                    if opts["start_date"] and opts["end_date"]:
-                        logging.getLogger("usenet_archiver").info(
-                            "Job window %s .. %s → %s",
-                            opts["start_date"].date(),
-                            opts["end_date"].date(),
-                            mbox_filename,
+                    for group in opts["groups"]:
+                        if self._stop_event.is_set() or gen != self._run_gen:
+                            return "cancelled"
+                        if is_binary_newsgroup(group):
+                            logging.getLogger("usenet_archiver").info(
+                                "Skipping binary newsgroup %s", group
+                            )
+                            continue
+                        mbox_filename = mbox_name_for(
+                            group, None, opts["start_date"], opts["end_date"]
                         )
-                    try:
-                        pull_group(
-                            client=client,
-                            group=opts["group"],
-                            mbox_filename=mbox_filename,
-                            start_date=opts["start_date"],
-                            end_date=opts["end_date"],
-                            overview_chunk=10000,
-                            dedup=True,
-                            plugins=[],
-                            completed_log="completed_newsgroups.log",
-                            logger=logging.getLogger("usenet_archiver"),
-                            conn_kwargs=conn_kwargs,
-                            connections=opts["connections"],
-                            pipeline_depth=opts["pipeline_depth"],
-                            skip_completed=opts["skip_completed"],
-                        )
-                    except TerminatedBySignal:
-                        return "cancelled"
-                    return mbox_filename
+                        if opts["start_date"] and opts["end_date"]:
+                            logging.getLogger("usenet_archiver").info(
+                                "Job window %s .. %s → %s",
+                                opts["start_date"].date(),
+                                opts["end_date"].date(),
+                                mbox_filename,
+                            )
+                        try:
+                            pull_group(
+                                client=client,
+                                group=group,
+                                mbox_filename=mbox_filename,
+                                start_date=opts["start_date"],
+                                end_date=opts["end_date"],
+                                overview_chunk=10000,
+                                dedup=True,
+                                plugins=[],
+                                completed_log="completed_newsgroups.log",
+                                logger=logging.getLogger("usenet_archiver"),
+                                conn_kwargs=conn_kwargs,
+                                connections=opts["connections"],
+                                pipeline_depth=opts["pipeline_depth"],
+                                skip_completed=opts["skip_completed"],
+                                dry_run=dry_run,
+                            )
+                        except TerminatedBySignal:
+                            return "cancelled"
+                        written.append(mbox_filename)
+                    if dry_run:
+                        return {"dry_run": True, "jobs": written}
+                    return ", ".join(written) if written else None
                 finally:
                     try:
                         client.quit()
@@ -558,10 +741,19 @@ class UsenetArchiverGUI:
             if result == "cancelled":
                 self._set_status("Cancelled")
                 return
+            if isinstance(result, dict) and result.get("dry_run"):
+                jobs = result.get("jobs") or []
+                messagebox.showinfo(
+                    "Dry run complete",
+                    "No articles downloaded.\n"
+                    f"Planned {len(jobs)} job(s).\n"
+                    "See the log for overview / dedup counts.",
+                )
+                return
             if result:
                 messagebox.showinfo("Done", f"Wrote {result}\nin {opts['output_dir']}")
 
-        self._run_in_background("Pull", work, done_fn=done)
+        self._run_in_background(label, work, done_fn=done)
 
 
 def main() -> None:

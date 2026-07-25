@@ -96,6 +96,7 @@ def resolve_credentials(
 
     if resolved_pass is None and password_file:
         with open(password_file, encoding="utf-8") as fh:
+            # Entire file is the password; a single trailing newline is ignored.
             resolved_pass = fh.read().rstrip("\n")
 
     if resolved_pass is None:
@@ -109,5 +110,9 @@ def resolve_credentials(
             resolved_user = n_user
         if resolved_pass is None:
             resolved_pass = n_pass
+
+    from .policy import check_server_allowed
+
+    check_server_allowed(host)
 
     return ResolvedEndpoint(host=host, port=port, username=resolved_user, password=resolved_pass)
